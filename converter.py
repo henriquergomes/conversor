@@ -236,9 +236,15 @@ def pdf_to_images(
     dpi: int = 300,
     all_pages: bool = False,
     progress_callback: ProgressCallback = None,
+    max_dimension_pixels: int = 4000,
 ) -> List[np.ndarray]:
     """
     Renderiza as páginas de um PDF diretamente para arrays NumPy em memória RAM via PyMuPDF.
+
+    Possui cálculo adaptativo de resolução: para páginas gigantescas (ex: pranchas ou PDFs
+    com milhares de pontos), ajusta a escala dinamicamente para respeitar o teto de segurança
+    (max_dimension_pixels), prevenindo o erro 'code=5: Overly large image' do MuPDF e mantendo
+    a máxima nitidez possível para gravação a laser.
     """
     def _notify(pct: int, msg: str):
         if progress_callback:
@@ -268,9 +274,40 @@ def pdf_to_images(
         total_p = len(pages_to_process)
         for i, page_num in enumerate(pages_to_process):
             pct = 15 + int((i / total_p) * 20)
-            _notify(pct, f"Renderizando página {page_num + 1}/{total_p} a {dpi} DPI na memória...")
             page = doc.load_page(page_num)
-            pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csGRAY)
+            rect = page.rect
+            page_max_pt = max(rect.width, rect.height)
+
+            # Cálculo de escala adaptativa:
+            # 72 pontos = 1 polegada no padrão PDF.
+            ideal_scale = dpi / 72.0
+            expected_pixels = page_max_pt * ideal_scale
+
+            if expected_pixels > max_dimension_pixels:
+                # Ajusta para não estourar o limite de memória do MuPDF
+                effective_scale = max_dimension_pixels / max(page_max_pt, 1.0)
+                _notify(pct, f"Página gigante detectada ({int(page_max_pt)}pt). Otimizando resolução adaptativa...")
+            else:
+                effective_scale = ideal_scale
+                _notify(pct, f"Renderizando página {page_num + 1}/{total_p} a {dpi} DPI na memória...")
+
+            # Renderização com fallback defensivo contra estouro de memória
+            current_scale = effective_scale
+            pix = None
+            for attempt in range(4):
+                try:
+                    mat = fitz.Matrix(current_scale, current_scale)
+                    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
+                    break
+                except Exception as render_err:
+                    err_str = str(render_err).lower()
+                    if ("large image" in err_str or "code=5" in err_str) and attempt < 3:
+                        current_scale *= 0.6  # Reduz a escala em 40% e tenta novamente
+                        continue
+                    raise ValueError(
+                        f"A imagem do PDF é excessivamente grande para a memória disponível: {render_err}"
+                    ) from render_err
+
             img_gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
             rendered_images.append(img_gray.copy())
     finally:
