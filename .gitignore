@@ -1,0 +1,30 @@
+# Ambientes virtuais
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# PyInstaller / Build outputs
+build/
+dist/
+*.spec
+
+# Testes e saídas temporárias
+test_output/
+*.dxf
+*.png
+*.jpg
+*.jpeg
+*.pdf
+!sample_test.*
+
+# IDEs e SO
+.DS_Store
+.vscode/
+.idea/
